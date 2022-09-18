@@ -399,11 +399,97 @@ function genFragment(
     blockDataMap = blockInfo.data ? Map(blockInfo.data) : Map();
   }
   if (!inBlock && (fragmentBlockTags.indexOf(nodeName) !== -1 || blockType)) {
-    chunk = getBlockDividerChunk(
-      blockType || getBlockTypeForTag(nodeName, lastList),
-      depth,
-      blockDataMap
-    );
+    // 2022-09-18 - We need to special-case unwanted empty <div> elements being inserted before and after <figure>
+    // elements.
+    //
+    // Given the following raw input to convertFromHTML:
+    //
+    // <p>Line One</p>
+    // <div contenteditable="false">
+    //   <figure>
+    //     <img alt="" src="...">
+    //   </figure>
+    // </div>
+    // <p>Line Two</p>
+    //
+    // The unmodified verison of this function incorrectly yields editor content like:
+    //
+    // <div data-block="true" data-editor="d63o0" data-offset-key="d0vum-0-0">
+    //   <div data-offset-key="d0vum-0-0">
+    //     <span data-offset-key="d0vum-0-0">
+    //       <span data-text="true">Line One&nbsp;</span>
+    //     </span>
+    //   </div>
+    // </div>
+    // <div data-block="true" data-editor="d63o0" data-offset-key="ba8p1-0-0">
+    //   <div data-offset-key="ba8p1-0-0">
+    //     <span data-offset-key="ba8p1-0-0">
+    //       <span data-text="true"> </span>
+    //     </span>
+    //   </div>
+    // </div>
+    // <figure data-block="true" data-editor="d63o0" data-offset-key="4rtc2-0-0" contenteditable="false">
+    //   <div>
+    //     <img alt="" src="...">
+    //   </div>
+    // </figure>
+    // <div data-block="true" data-editor="d63o0" data-offset-key="b8fs4-0-0">
+    //   <div data-offset-key="b8fs4-0-0">
+    //     <span data-offset-key="b8fs4-0-0">
+    //       <span data-text="true"> </span>
+    //     </span>
+    //   </div>
+    // </div>
+    // <div data-block="true" data-editor="d63o0" data-offset-key="c6j6n-0-0">
+    //   <div data-offset-key="c6j6n-0-0">
+    //     <span data-offset-key="c6j6n-0-0">
+    //       <span data-text="true">Line Two</span>
+    //     </span>
+    //   </div>
+    // </div>
+    //
+    // Note that there are 5 top-level elements in the output of convertFromHTML even though there are only 3 top-level
+    // elements in the input HTML. Specifically, there are two new top-level <div> elements inserted before and after
+    // the <figure> element, which new top-level <div> elements contain only whitespace.
+    //
+    // The expected behavior is for there to be only 3 top-level elements (the same 3 as in the input HTML):
+    //
+    // <div data-block="true" data-editor="d1t0p" data-offset-key="egc1d-0-0">
+    //   <div data-offset-key="egc1d-0-0">
+    //     <span data-offset-key="egc1d-0-0">
+    //       <span data-text="true">Line One&nbsp;</span>
+    //     </span>
+    //   </div>
+    // </div>
+    // <figure data-block="true" data-editor="d1t0p" data-offset-key="4rtc2-0-0" contenteditable="false">
+    //   <div>
+    //     <img alt="" src="...">
+    //   </div>
+    // </figure>
+    // <div data-block="true" data-editor="d1t0p" data-offset-key="58umk-0-0">
+    //   <div data-offset-key="58umk-0-0">
+    //     <span data-offset-key="58umk-0-0">
+    //       <span data-text="true">Line Two</span>
+    //     </span>
+    //   </div>
+    // </div>
+    //
+    // There may be other scenarios with similar characteristics not currently covered by this change.
+    //
+    // The new conditional case where the first child of a <div> element is a <figure> element addresses the issue of
+    // the leading (not the trailing) unwanted empty <div> element. The trailing unwanted empty <div> element is
+    // handled below, just before the end of this funciton.
+    //
+    // There may be similar behavior not captured by this special case
+    if (nodeName === 'div' && node.firstChild !== null && node.firstChild.nodeName.toLowerCase() === 'figure') {
+      chunk = getEmptyChunk();
+    } else {
+      chunk = getBlockDividerChunk(
+        blockType || getBlockTypeForTag(nodeName, lastList),
+        depth,
+        blockDataMap
+      );
+    }
     inBlock = blockType || getBlockTypeForTag(nodeName, lastList);
     newBlock = true;
   } else if (
@@ -514,7 +600,10 @@ function genFragment(
     child = sibling;
   }
 
-  if (newBlock) {
+  // 2022-09-18 - See comment above about special-casing for unwanted empty <div> elements being inserted before and
+  // after <figure> elements. Adding the second conditional clause (nodeName !== 'figure') prevents an empty <div>
+  // element from being appended to the list of valid chunks.
+  if (newBlock && nodeName !== 'figure') {
     chunk = joinChunks(
       chunk,
       getBlockDividerChunk(nextBlockType, depth, Map()),
@@ -541,6 +630,9 @@ function getChunkForHTML(
   html = html
     .trim()
     .replace(REGEX_CR, '')
+    // 2022-09-18 - See comment above about special-casing for unwanted empty <div> elements being inserted before and
+    // after <figure> elements. Removing \n characters filters out text nodes with no actual content.
+    .replace(REGEX_LF, '')
     .replace(REGEX_NBSP, SPACE);
 
   const safeBody = DOMBuilder(html);
